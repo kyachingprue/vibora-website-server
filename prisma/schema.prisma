@@ -1,0 +1,269 @@
+// Prisma schema — PostgreSQL on Neon
+// 🔑 DATABASE_URL (pooled) and DIRECT_URL (direct) are read from your .env file.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooled connection  -> runtime queries
+  directUrl = env("DIRECT_URL") // direct connection  -> migrations
+}
+
+enum CodeType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+enum NotificationType {
+  LIKE
+  COMMENT
+  FOLLOW
+  MENTION
+}
+
+// ───────────────────────── Users & auth ─────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  username      String   @unique
+  email         String   @unique
+  passwordHash  String
+  emailVerified Boolean  @default(false)
+  role          String   @default("USER")
+  isActive      Boolean  @default(true)
+  avatar        String?
+  cover         String?
+  bio           String?
+  location      String?
+  website       String?
+  passion       String?
+  relationshipStatus String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  posts         Post[]
+  comments      Comment[]
+  likes         Like[]
+  bookmarks     Bookmark[]
+  following     Follow[]            @relation("Follower")
+  followers     Follow[]            @relation("Following")
+  refreshTokens RefreshToken[]
+  codes         VerificationCode[]
+  received      Notification[]      @relation("Recipient")
+  triggered     Notification[]      @relation("Actor")
+  conversations ConversationMember[]
+  messages      Message[]
+  communities   CommunityMember[]
+  events        EventAttendee[]
+}
+
+model RefreshToken {
+  id        String    @id
+  userId    String
+  tokenHash String
+  userAgent String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationCode {
+  id        String   @id @default(cuid())
+  userId    String
+  type      CodeType
+  codeHash  String
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+// ───────────────────────── Social graph ─────────────────────────
+
+model Follow {
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@id([followerId, followingId])
+  @@index([followingId])
+}
+
+// ───────────────────────── Posts ─────────────────────────
+
+model Post {
+  id        String   @id @default(cuid())
+  authorId  String
+  text      String   @default("")
+  image     String?
+  video         String?  // Cloudinary secure URL
+  videoPublicId String?  @unique // Cloudinary public_id (used to delete / thumbnail)
+  videoDuration Float?   // seconds
+  shares    Int      @default(0)
+  createdAt DateTime @default(now())
+
+  author        User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  likes         Like[]
+  comments      Comment[]
+  bookmarks     Bookmark[]
+  notifications Notification[]
+
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([authorId, createdAt(sort: Desc)])
+}
+
+model Like {
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postId])
+  @@index([postId])
+}
+
+model Bookmark {
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postId])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  postId    String
+  authorId  String
+  text      String
+  createdAt DateTime @default(now())
+  parentId  String?
+
+  post     Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author   User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent   Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  Comment[] @relation("CommentReplies")
+
+  @@index([postId, createdAt(sort: Desc)])
+  @@index([parentId, createdAt(sort: Asc)])
+}
+
+// ───────────────────────── Notifications ─────────────────────────
+
+model Notification {
+  id          String           @id @default(cuid())
+  recipientId String
+  actorId     String
+  type        NotificationType
+  postId      String?
+  read        Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+
+  recipient User  @relation("Recipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  actor     User  @relation("Actor", fields: [actorId], references: [id], onDelete: Cascade)
+  post      Post? @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, createdAt(sort: Desc)])
+}
+
+// ───────────────────────── Direct messages ─────────────────────────
+
+model Conversation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  members  ConversationMember[]
+  messages Message[]
+}
+
+model ConversationMember {
+  conversationId String
+  userId         String
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  senderId       String
+  text           String
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt(sort: Desc)])
+}
+
+// ───────────────────────── Communities & events ─────────────────────────
+
+model Community {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  about     String   @default("")
+  cover     String?
+  createdAt DateTime @default(now())
+
+  members CommunityMember[]
+}
+
+model CommunityMember {
+  communityId String
+  userId      String
+  joinedAt    DateTime @default(now())
+
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([communityId, userId])
+  @@index([userId])
+}
+
+model Event {
+  id          String   @id @default(cuid())
+  title       String
+  description String   @default("")
+  cover       String?
+  location    String
+  startsAt    DateTime
+  createdAt   DateTime @default(now())
+
+  attendees EventAttendee[]
+
+  @@index([startsAt])
+}
+
+model EventAttendee {
+  eventId String
+  userId  String
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, userId])
+  @@index([userId])
+}
